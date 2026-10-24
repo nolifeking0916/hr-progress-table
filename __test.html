@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="集团人力近期重点工作进度表：事项视图 / 明细视图 / 甘特视图，筛选、排序、导出 CSV。">
+<title>集团人力近期重点工作进度表</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="skip-link" href="#main">跳到主内容</a>
+
+<header class="app-header">
+  <div class="app-header__lead">
+    <h1 class="app-header__title">集团人力近期重点工作进度表</h1>
+    <p class="app-header__sub">集团行政人事部　·　六大模块 / 人·流程·成本 口径　·　<noscript><strong>本页需要启用 JavaScript。</strong></noscript></p>
+  </div>
+  <div class="app-header__meta">
+    <span class="stamp" id="data-stamp" aria-live="polite">数据截至 —</span>
+    <span class="badge badge--warn" id="stale-badge" hidden>数据滞后 <span id="stale-days">—</span> 天</span>
+    <span class="stamp stamp--muted" id="generated-stamp"></span>
+  </div>
+</header>
+
+<div class="load-error" id="load-error" role="alert" hidden>
+  <strong>数据未加载。</strong>
+  请确认 <code>data/rows.js</code> 与本页在同一目录下；如需重建，运行
+  <code>python3 scripts/build_data_js.py</code>。
+</div>
+
+<form class="filters" id="filters" aria-label="筛选与操作" autocomplete="off">
+  <div class="filters__row">
+    <fieldset class="field">
+      <legend class="field__label">一级维度（六大模块）</legend>
+      <div class="chips" id="chip-modules" role="group" aria-label="按一级维度筛选，可多选"></div>
+    </fieldset>
+
+    <fieldset class="field">
+      <legend class="field__label">二级维度（人 / 流程 / 成本）</legend>
+      <div class="chips" id="chip-natures" role="group" aria-label="按二级维度筛选，可多选"></div>
+    </fieldset>
+  </div>
+
+  <div class="filters__row filters__row--controls">
+    <div class="field field--inline">
+      <label class="field__label" for="sel-owner">责任人</label>
+      <select class="control" id="sel-owner">
+        <option value="">全部</option>
+      </select>
+    </div>
+
+    <div class="field field--inline field--grow">
+      <label class="field__label" for="txt-keyword">关键词</label>
+      <input class="control" id="txt-keyword" type="search" placeholder="事项 / 分项 / 进展内容 / 计划" autocomplete="off">
+    </div>
+
+    <div class="field field--inline">
+      <span class="field__label" id="lbl-weekonly">时间范围</span>
+      <label class="switch" for="chk-weekonly">
+        <input type="checkbox" id="chk-weekonly">
+        <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+        <span class="switch__text">只看本周有进展或有计划的</span>
+      </label>
+    </div>
+
+    <div class="field field--inline field--actions">
+      <span class="field__label" id="lbl-sort">排序</span>
+      <select class="control" id="sel-sort" aria-labelledby="lbl-sort">
+        <option value="seq">事项序号</option>
+        <option value="module">模块</option>
+        <option value="latest">最近进展日期</option>
+        <option value="end">完成时间</option>
+      </select>
+      <button class="btn btn--ghost" id="btn-sortdir" type="button" aria-label="切换排序方向" data-dir="asc">
+        <span class="btn__icon" aria-hidden="true" id="sortdir-icon">↑</span><span id="sortdir-text">升序</span>
+      </button>
+      <button class="btn btn--ghost" id="btn-reset" type="button">重置</button>
+      <button class="btn" id="btn-csv" type="button">导出 CSV</button>
+      <button class="btn btn--ghost" id="btn-print" type="button">打印</button>
+    </div>
+  </div>
+</form>
+
+<nav class="viewtabs" aria-label="视图切换">
+  <div class="viewtabs__group" role="tablist" aria-label="视图切换">
+    <button class="tab is-active" id="tab-items" role="tab" type="button" aria-selected="true" aria-controls="view-items" data-view="items">事项视图</button>
+    <button class="tab" id="tab-detail" role="tab" type="button" aria-selected="false" aria-controls="view-detail" data-view="detail" tabindex="-1">明细视图</button>
+    <button class="tab" id="tab-gantt" role="tab" type="button" aria-selected="false" aria-controls="view-gantt" data-view="gantt" tabindex="-1">甘特视图</button>
+  </div>
+  <p class="viewtabs__status" id="view-status" aria-live="polite">—</p>
+</nav>
+
+<main id="main" tabindex="-1">
+
+  <!-- 视图一：事项视图（每行 = 一个事项，展开看分项与逐日记录） -->
+  <section class="view" id="view-items" role="tabpanel" aria-labelledby="tab-items">
+    <div class="viewtools">
+      <p class="viewtools__hint">点行（或点 ▸）展开该事项的分项与逐日记录：日期 / 进展内容 / 当日计划 一一对应。</p>
+      <div class="viewtools__acts">
+        <button class="btn btn--ghost" id="btn-expand-all" type="button">展开全部</button>
+        <button class="btn btn--ghost" id="btn-collapse-all" type="button">收起全部</button>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table class="grid grid--items" id="tbl-items">
+        <caption class="sr-only">按事项汇总的进度表，共 43 个事项。点击事项名称可展开该事项的分项与逐日记录。</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="col-idx">序号</th>
+            <th scope="col" class="col-mod" data-sort="module">模块</th>
+            <th scope="col" class="col-nat">性质</th>
+            <th scope="col" class="col-item" data-sort="seq">事项</th>
+            <th scope="col" class="col-sub">分项数</th>
+            <th scope="col" class="col-intro">分项简介</th>
+            <th scope="col" class="col-latest" data-sort="latest">最新进展</th>
+            <th scope="col" class="col-span" data-sort="end">开始 · 完成</th>
+            <th scope="col" class="col-bar">工期</th>
+            <th scope="col" class="col-plan">本周计划要点</th>
+            <th scope="col" class="col-owner">责任人</th>
+            <th scope="col" class="col-lead">负责人</th>
+            <th scope="col" class="col-typ">负责人类型</th>
+            <th scope="col" class="col-coord">协调事项</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-items"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="items-empty" hidden>当前筛选条件下没有事项。请调整筛选或点「重置」。</p>
+  </section>
+
+  <!-- 视图二：明细视图（167 行长表，15 列，无合并单元格） -->
+  <section class="view" id="view-detail" role="tabpanel" aria-labelledby="tab-detail" hidden>
+    <div class="table-scroll">
+      <table class="grid grid--detail" id="tbl-detail">
+        <caption class="sr-only">逐行明细表：事项 × 分项 × 日期，共 167 行、15 列。</caption>
+        <thead>
+          <tr>
+            <th scope="col" class="col-idx">事项序号</th>
+            <th scope="col" class="col-mod">一级维度（六大模块）</th>
+            <th scope="col" class="col-nat">二级维度（人/流程/成本）</th>
+            <th scope="col" class="col-item">具体事项</th>
+            <th scope="col" class="col-sub">分项</th>
+            <th scope="col" class="col-intro">分项内容简介</th>
+            <th scope="col" class="col-date">进展日期</th>
+            <th scope="col" class="col-prog">进展内容</th>
+            <th scope="col" class="col-date">开始时间</th>
+            <th scope="col" class="col-date">完成时间</th>
+            <th scope="col" class="col-plan">当日计划（周计划）</th>
+            <th scope="col" class="col-owner">责任人</th>
+            <th scope="col" class="col-lead">负责人</th>
+            <th scope="col" class="col-typ">负责人类型</th>
+            <th scope="col" class="col-coord">协调事项</th>
+          </tr>
+        </thead>
+        <tbody id="tbody-detail"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="detail-empty" hidden>当前筛选条件下没有明细行。</p>
+  </section>
+
+  <!-- 视图三：甘特视图（一条横轴 = 时间轴，一条 = 一个事项） -->
+  <section class="view" id="view-gantt" role="tabpanel" aria-labelledby="tab-gantt" hidden>
+    <div class="gantt" id="gantt">
+      <div class="gantt__head">
+        <div class="gantt__labels gantt__labels--head">
+          <div class="gantt__labelhead">事项</div>
+        </div>
+        <div class="gantt__axis" id="gantt-axis"></div>
+      </div>
+      <div class="gantt__body">
+        <div class="gantt__labels" id="gantt-labels"></div>
+        <div class="gantt__plot" id="gantt-plot"></div>
+      </div>
+    </div>
+    <div class="legend" id="gantt-legend" aria-label="图例"></div>
+    <p class="empty" id="gantt-empty" hidden>当前筛选条件下没有可排期的事项。</p>
+  </section>
+
+</main>
+
+<details class="notes" id="notes">
+  <summary class="notes__summary">
+    <span>口径说明</span>
+    <span class="notes__hint">数据怎么来的、哪些列还没有口径、A/B 含义未知等</span>
+  </summary>
+  <div class="notes__body">
+    <section class="notes__sec">
+      <h2>1. 这张表是什么粒度</h2>
+      <p>一行 = <strong>事项 × 分项 × 日期</strong>。共 43 个事项、167 行、15 列，<strong>没有任何合并单元格</strong>。</p>
+      <ul>
+        <li>有进展的（分项，日期）→ 一行，带当天进展内容；</li>
+        <li>只有计划、没有进展的（事项，日期）→ 一行，分项取主分项，进展内容留空；</li>
+        <li>同一（事项，日期）的计划只出现一次，优先挂在当天第一条进展行上。</li>
+      </ul>
+      <p class="notes__muted">结果：64 行有进展、102 行只有计划、1 行为空壳待补。</p>
+    </section>
+
+    <section class="notes__sec">
+      <h2>2. 六个维度怎么定的</h2>
+      <table class="notes__table">
+        <thead><tr><th scope="col">维度</th><th scope="col">字段</th><th scope="col">口径</th></tr></thead>
+        <tbody>
+          <tr><td>一</td><td>一级维度（六大模块）</td><td>人力资源规划 / 招聘与配置 / 培训与开发 / 绩效管理 / 薪酬福利 / 员工关系 / 待定位。沿用集团既有六职能口径（企业数据库六大职能面板），不另起一套。</td></tr>
+          <tr><td>二</td><td>二级维度（人/流程/成本）</td><td>人＝具体的人、岗位、编制、招聘、培训、宣贯、盘点、访谈、员工信息；流程＝制度、标准、审批、机制、系统配置、发布与库维护；成本＝钱（测算、费用、补贴、薪酬标准、预算）。分不进的暂挂「待定位」。</td></tr>
+          <tr><td>三</td><td>具体事项</td><td>事项名，沿用源表原「分项」列（源表那一列装的就是事项名）。</td></tr>
+          <tr><td>四</td><td>分项</td><td><strong>源文本点名才拆</strong>：销售提点→茅森/恐龙/聚力提点；研创院工程绩考核→两个考核方案；职位职级与后台月薪标准→三类机构核查。其余分项＝事项名，不制造源数据里没有的分项。</td></tr>
+          <tr><td>五</td><td>分项内容简介</td><td>一句话，沿用源表「概要」；3 条制度类事项改写为 4 制度 6 细则的逐项归口。</td></tr>
+          <tr><td>六</td><td>最新进展</td><td>拆源表「最新进展」列：每行一个日期一条进展。读法：按「事项序号↑ / 进展日期↓」看，每个事项块第一条<strong>非空</strong>进展就是该事项的最新进展。</td></tr>
+          <tr><td>七</td><td>周计划</td><td>拆源表「周计划」列，按天逐行；同一天的计划只出现一次。</td></tr>
+        </tbody>
+      </table>
+      <p class="notes__muted">「周计划」与「进展」按日期并集逐日对齐：同一天的计划挂在那天的进展行上，所以未来某天的行天然只有计划、没有进展——这是结构性的，不是数据缺失。</p>
+    </section>
+
+    <section class="notes__sec">
+      <h2>3. 待核 / 待补：哪些数据需要人来确认</h2>
+      <p>判定规则（与 <code>scripts/build_rows.py</code> 一致）：</p>
+      <ul>
+        <li><span class="badge badge--warn">待核</span> 源表「最新进展」里<strong>某一行没有 MMDD 日期前缀</strong> → 该行按开始时间落行，标「待核」。逐行判定，不是整条事项判定。</li>
+        <li><span class="badge badge--warn">待补</span> 进展与周计划<strong>都为空</strong> → 按开始时间落一行空行，标「待补」。</li>
+      </ul>
+      <p class="notes__muted">当前：待核 5 条、待补 1 条。页面上的「待核」角标即据此渲染。</p>
+    </section>
+
+    <section class="notes__sec">
+      <h2>4. 口径待定：页面不臆造的部分</h2>
+      <table class="notes__table">
+        <thead><tr><th scope="col">项</th><th scope="col">现状</th><th scope="col">页面处理</th></tr></thead>
+        <tbody>
+          <tr><td><strong>负责人类型 A / B</strong></td><td>源表 43 条全是 B，<strong>没有图例，A/B 到底指什么至今未知</strong>。</td><td>原样显示原始值，<strong>不加颜色、不加图例、不猜含义</strong>。这是废列，等口径。</td></tr>
+          <tr><td><strong>协调事项</strong></td><td>源表整列为空。</td><td>列保留（用户明确要求），有值就显示值，无值显示「—」。</td></tr>
+          <tr><td>「集团其他制度」「各机构制度」的模块归口</td><td>制度清单未给。</td><td>暂挂「待定位」模块。</td></tr>
+          <tr><td>事项序号撞号</td><td>源表今天被重排过，序号 <strong>13</strong> 与 <strong>20</strong> 各对应两个事项（21 个序号承载 43 条事项）。</td><td>序号只作展示与排序的首要键，排序以「序号 → 模块 → 事项名」作稳定次序，不合并这两条。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="notes__sec">
+      <h2>5. 页面上的状态标签怎么算</h2>
+      <ul>
+        <li><span class="badge badge--done">已完成</span> 存在一条进展日期 <strong>≥ 该事项完成时间</strong> 的非空进展。</li>
+        <li><span class="badge badge--warn">逾期</span> 今天已过完成时间，但还没有上面那种进展。</li>
+        <li><span class="badge badge--doing">进行中</span> 其余情况。</li>
+      </ul>
+      <p class="notes__muted">这三个标签完全由数据推导，没有另设状态字段；改口径只需改 <code>app.js</code> 的 <code>computeState()</code>。</p>
+    </section>
+
+    <section class="notes__sec">
+      <h2>6. 数据清洗规则（已自动处理）</h2>
+      <table class="notes__table">
+        <thead><tr><th scope="col">情形</th><th scope="col">处理</th></tr></thead>
+        <tbody>
+          <tr><td>日期写成 <code>1118</code>（应为 1018）</td><td>自动归一（4 处）</td></tr>
+          <tr><td>日期写成 <code>2021 / 2023 / 2025</code></td><td>自动归一为 1021 / 1023 / 1025</td></tr>
+          <tr><td>进展没有日期前缀</td><td>按该事项开始时间落行，并标「待核」</td></tr>
+          <tr><td>进展与周计划都为空</td><td>按开始时间落一行空行，并标「待补」</td></tr>
+          <tr><td>源表列错位（粘贴行，事项名落在 C 列）</td><td>抽取时按「D 非空取 D；否则 C 非空且 E 非空取 C」处理</td></tr>
+          <tr><td>分类/分组两列是纵向合并单元格</td><td>读取后向下填充</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="notes__sec">
+      <h2>7. 「4 个制度、6 个细则」的归口名单</h2>
+      <p class="notes__muted">源表「优化及发布试行稿」的概要只写了数量，名单已定位，数目与概要完全吻合：</p>
+      <table class="notes__table">
+        <thead><tr><th scope="col">制度 / 细则</th><th scope="col">归口模块</th></tr></thead>
+        <tbody>
+          <tr><td>部门设置标准细则（7-1）</td><td>人力资源规划</td></tr>
+          <tr><td>员工作休细则（7-31）</td><td>员工关系</td></tr>
+          <tr><td>招聘管理制度（9-0）</td><td>招聘与配置</td></tr>
+          <tr><td>绩效考核管理制度（11-0）／绩效考核细则（11-2）</td><td>绩效管理</td></tr>
+          <tr><td>薪酬管理制度（12-0）</td><td>薪酬福利</td></tr>
+          <tr><td>晋升管理制度（36-0）／O·P·M 序列员工晋升管理细则（36-1/2/3）</td><td>人力资源规划</td></tr>
+        </tbody>
+      </table>
+      <p class="notes__muted">逐制度进展待补；补齐后可按同一套规则展开成 10 个分项行，表结构不用改。</p>
+    </section>
+
+    <section class="notes__sec">
+      <h2>8. 数据来源与刷新</h2>
+      <p>源表：企业微信在线表格《集团人力近期重点工作进度表》。链路：</p>
+      <p class="notes__muted"><code>extract_online_sheet.py</code> → <code>tasks_online.json</code> → <code>build_rows.py</code> → <code>rows_v2.json</code> → <code>build_data_js.py</code> → <code>data/rows.js</code>（本页面加载）</p>
+      <p>「数据截至」= 数据集里<strong>有进展内容</strong>的最晚日期；纯计划的未来日期（如 11 月）不计入。</p>
+    </section>
+  </div>
+</details>
+
+<footer class="app-footer">
+  <p><strong>集团行政人事部</strong>　·　集团人力近期重点工作进度表</p>
+  <p class="app-footer__meta" id="footer-meta">—</p>
+</footer>
+
+<script src="data/rows.js"></script>
+<script src="app.js"></script>
+
+<script>
+window.addEventListener('load', function(){
+  setTimeout(function(){
+    var out=[];
+    function t(k,v){out.push(k+' = '+v);}
+    t('now', new Date().toString());
+    t('todayISO', new Date().getFullYear()+'-'+('0'+(new Date().getMonth()+1)).slice(-2)+'-'+('0'+new Date().getDate()).slice(-2));
+    t('dataStamp', (document.getElementById('data-stamp')||{}).textContent);
+    t('staleHidden', (document.getElementById('stale-badge')||{}).hidden);
+    t('staleDays', (document.getElementById('stale-days')||{}).textContent);
+    t('itemRows', document.querySelectorAll('#tbody-items tr.item-row').length);
+    t('expandRows', document.querySelectorAll('#tbody-items tr.item-expand').length);
+    t('detailRows', document.querySelectorAll('#tbody-detail tr').length);
+    t('status', (document.getElementById('view-status')||{}).textContent);
+    t('ownerOptions', document.querySelectorAll('#sel-owner option').length);
+    t('modChips', document.querySelectorAll('#chip-modules .chip').length);
+    t('errors', window.__errs ? window.__errs.join(' | ') : 'none');
+    document.title='DIAG::'+out.join(' ;; ');
+    var pre=document.createElement('pre'); pre.id='diagout'; pre.textContent=out.join('\n');
+    document.body.appendChild(pre);
+  }, 300);
+});
+window.__errs=[];
+window.addEventListener('error', function(e){ window.__errs.push(e.message+' @'+e.filename+':'+e.lineno); });
+</script>
+</body>
+</html>
