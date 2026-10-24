@@ -1,0 +1,7 @@
+# 本目录下的运行时产物，不入库
+app.db
+app.db-journal
+app.db-wal
+app.db-shm
+mock_sheet.json
+mock_sheet.json.tmp

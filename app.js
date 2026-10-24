@@ -475,19 +475,33 @@
   }
 
   function weekPlanCell(item) {
-    var plans = [];
+    var raw = [];
     (item.__rows || item.rows).forEach(function (r) {
       var p = String(r['当日计划（周计划）'] || '').trim();
       if (!p) return;
       if (!rowInWeek(r)) return;
-      plans.push({ date: r['进展日期'], text: p });
+      raw.push({ date: r['进展日期'], text: p });
     });
-    if (!plans.length) return dash();
-    var shown = plans.slice(0, PLAN_MAX_INLINE).map(function (p) {
-      return '<li><span class="planlist__d">' + esc(fmtMD(p.date)) + '</span>' + esc(p.text) + '</li>';
+    if (!raw.length) return dash();
+    raw.sort(function (x, y) { return x.date < y.date ? -1 : (x.date > y.date ? 1 : 0); });
+
+    // 区间型计划（如 1019-1030 每日跟进）在明细里被逐日展开过，
+    // 这里把连续同文的日期并成一段，避免一屏重复同一句话。
+    var grouped = [];
+    raw.forEach(function (p) {
+      var last = grouped[grouped.length - 1];
+      if (last && last.text === p.text) { last.end = p.date; last.days++; }
+      else grouped.push({ text: p.text, start: p.date, end: p.date, days: 1 });
+    });
+
+    var shown = grouped.slice(0, PLAN_MAX_INLINE).map(function (g) {
+      var span = (g.days > 1 && g.start !== g.end)
+        ? fmtMD(g.start) + '~' + fmtMD(g.end)
+        : fmtMD(g.start);
+      return '<li><span class="planlist__d">' + esc(span) + '</span>' + esc(g.text) + '</li>';
     }).join('');
-    var more = plans.length > PLAN_MAX_INLINE
-      ? '<li class="planmore">另有 ' + (plans.length - PLAN_MAX_INLINE) + ' 条</li>' : '';
+    var more = grouped.length > PLAN_MAX_INLINE
+      ? '<li class="planmore">另有 ' + (grouped.length - PLAN_MAX_INLINE) + ' 条</li>' : '';
     return '<ul class="planlist">' + shown + more + '</ul>';
   }
 
@@ -533,7 +547,8 @@
             (expanded ? '▾' : '▸') + '</button>' +
             '<span class="itemname__text">' + esc(item.name) + '</span>' +
             '<span class="rowflags">' + stateBadge(item) +
-              (item.pending ? '<span class="badge badge--warn">' + esc(item.pending) + '</span>' : '') +
+              (item.pending && !(item.latest && item.latest.row.__pending === item.pending)
+                ? '<span class="badge badge--warn">' + esc(item.pending) + '</span>' : '') +
             '</span>' +
           '</div>' +
         '</td>' +
@@ -725,8 +740,10 @@
         var mx = x(monthCursor);
         axisSvg.push('<line x1="' + mx.toFixed(1) + '" y1="0" x2="' + mx.toFixed(1) + '" y2="' + GANTT_AXIS_H +
           '" stroke="' + C.border2 + '" stroke-width="1"/>');
-        axisSvg.push('<text x="' + (mx + 4).toFixed(1) + '" y="13" font-size="10" fill="' + C.text2 + '">' +
-          esc(monthCursor.getFullYear() + '年' + (monthCursor.getMonth() + 1) + '月') + '</text>');
+        if (mx + 66 <= width) {
+          axisSvg.push('<text x="' + (mx + 4).toFixed(1) + '" y="13" font-size="10" fill="' + C.text2 + '">' +
+            esc(monthCursor.getFullYear() + '年' + (monthCursor.getMonth() + 1) + '月') + '</text>');
+        }
       }
       monthCursor.setMonth(monthCursor.getMonth() + 1);
       monthCursor.setDate(1);
@@ -736,7 +753,7 @@
     tick.setDate(1);
     while (tick <= range.max) {
       var tx = x(tick);
-      if (tx >= 0 && tx <= width) {
+      if (tx >= 0 && tx + 30 <= width) {
         axisSvg.push('<text x="' + (tx + 3).toFixed(1) + '" y="' + (GANTT_AXIS_H - 5) +
           '" font-size="9" fill="' + C.text3 + '">' + esc((tick.getMonth() + 1) + '/' + tick.getDate()) + '</text>');
       }
@@ -889,7 +906,7 @@
     if (window.location.hash.slice(1) !== view) {
       try { history.replaceState(null, '', '#' + view); } catch (e) { /* file:// 下可能受限 */ }
     }
-    ['items', 'detail', 'gantt'].forEach(function (v) {
+    ['items', 'detail', 'gantt', 'panel'].forEach(function (v) {
       var panel = $('#view-' + v);
       var tab = $('#tab-' + v);
       var on = (v === view);
@@ -901,6 +918,10 @@
     if (view === 'gantt') {
       var f = computeFiltered();
       renderGantt(f.items);
+    }
+    // 进度面板等新视图由 app-multi.js 接管
+    if (window.HPS && window.HPS.onView) {
+      try { window.HPS.onView(view); } catch (e) { console.error('onView', e); }
     }
     window.scrollTo(0, 0);
   }
@@ -980,7 +1001,10 @@
 
     // ---- 排序 ----
     $('#sel-sort').addEventListener('change', function (e) {
-      state.sortKey = e.target.value;
+      var k = e.target.value;
+      if (k !== state.sortKey) state.sortDir = 'asc';   // 换排序字段 → 从头排，避免"怎么反了"
+      state.sortKey = k;
+      syncSortDir();
       render();
     });
     $('#btn-sortdir').addEventListener('click', function () {
@@ -1169,9 +1193,32 @@
     syncSortDir();
     bindEvents();
     var wanted = (window.location.hash || '').slice(1);
-    setView(['items', 'detail', 'gantt'].indexOf(wanted) >= 0 ? wanted : 'items');
+    setView(['items', 'detail', 'gantt', 'panel'].indexOf(wanted) >= 0 ? wanted : 'items');
     render();
   }
+
+  /* ---------------------------------------------------------------------
+     对外暴露给 app-multi.js（多用户 / 记一笔进展 / 新建任务 / 进度面板）
+     只读暴露 + 少量钩子，不改现有行为。
+     --------------------------------------------------------------------- */
+  window.HPS = {
+    COLUMNS: COLUMNS, MODULES: MODULES, NATURES: NATURES, DATA: DATA,
+    get model() { return MODEL; },
+    get state() { return state; },
+    get today() { return TODAY; },
+    get week() { return WEEK; },
+    get dataAsOf() { return DATA_ASOF; },
+    get globalMin() { return GLOBAL_MIN; },
+    get globalMax() { return GLOBAL_MAX; },
+    computeFiltered: computeFiltered,
+    setView: setView,
+    render: render,
+    esc: esc, fmtDate: fmtDate, fmtMD: fmtMD, fmtDay: fmtDay, dash: dash,
+    splitNames: splitNames, moduleColor: moduleColor, cssVar: cssVar,
+    daysBetween: daysBetween, weekRange: weekRange, todayDate: todayDate,
+    parseDate: parseDate, byText: byText, pad2: pad2,
+    onView: null
+  };
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

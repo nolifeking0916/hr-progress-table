@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="集团人力近期重点工作进度表：事项视图 / 明细视图 / 甘特视图，筛选、排序、导出 CSV。">
+<meta name="description" content="集团人力近期重点工作进度表：事项视图 / 明细视图 / 甘特视图 / 进度面板，筛选、排序、导出 CSV、记一笔进展、新建任务。">
 <title>集团人力近期重点工作进度表</title>
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -21,14 +21,38 @@
     <span class="stamp" id="data-stamp" aria-live="polite">数据截至 —</span>
     <span class="badge badge--warn" id="stale-badge" hidden>数据滞后 <span id="stale-days">—</span> 天</span>
     <span class="stamp stamp--muted" id="generated-stamp"></span>
+    <div class="identity" id="identity" aria-live="polite"></div>
   </div>
 </header>
+
+<div class="banners" id="banners"></div>
 
 <div class="load-error" id="load-error" role="alert" hidden>
   <strong>数据未加载。</strong>
   请确认 <code>data/rows.js</code> 与本页在同一目录下；如需重建，运行
   <code>python3 scripts/build_data_js.py</code>。
 </div>
+
+<div class="actionbar" id="actionbar">
+  <button class="btn actionbar__primary" id="btn-progress" type="button">＋ 记一笔进展</button>
+  <button class="btn btn--ghost actionbar__secondary" id="btn-newtask" type="button">＋ 新建任务</button>
+  <span class="actionbar__hint" id="actionbar-hint">⌘ / Ctrl + N 快速记一笔</span>
+</div>
+
+<nav class="viewtabs" aria-label="视图切换">
+  <div class="viewtabs__groups" role="tablist" aria-label="视图切换">
+    <div class="viewtabs__group">
+      <button class="tab is-active" id="tab-items" role="tab" type="button" aria-selected="true" aria-controls="view-items" data-view="items">事项视图</button>
+      <button class="tab" id="tab-detail" role="tab" type="button" aria-selected="false" aria-controls="view-detail" data-view="detail" tabindex="-1">明细视图</button>
+      <button class="tab" id="tab-gantt" role="tab" type="button" aria-selected="false" aria-controls="view-gantt" data-view="gantt" tabindex="-1">甘特视图</button>
+    </div>
+    <div class="viewtabs__sep" aria-hidden="true"></div>
+    <div class="viewtabs__group">
+      <button class="tab" id="tab-panel" role="tab" type="button" aria-selected="false" aria-controls="view-panel" data-view="panel" tabindex="-1">进度面板<span class="badge badge--warn tab__badge" id="panel-badge" hidden></span></button>
+    </div>
+  </div>
+  <p class="viewtabs__status" id="view-status" aria-live="polite">—</p>
+</nav>
 
 <form class="filters" id="filters" aria-label="筛选与操作" autocomplete="off">
   <div class="filters__row">
@@ -83,21 +107,12 @@
   </div>
 </form>
 
-<nav class="viewtabs" aria-label="视图切换">
-  <div class="viewtabs__group" role="tablist" aria-label="视图切换">
-    <button class="tab is-active" id="tab-items" role="tab" type="button" aria-selected="true" aria-controls="view-items" data-view="items">事项视图</button>
-    <button class="tab" id="tab-detail" role="tab" type="button" aria-selected="false" aria-controls="view-detail" data-view="detail" tabindex="-1">明细视图</button>
-    <button class="tab" id="tab-gantt" role="tab" type="button" aria-selected="false" aria-controls="view-gantt" data-view="gantt" tabindex="-1">甘特视图</button>
-  </div>
-  <p class="viewtabs__status" id="view-status" aria-live="polite">—</p>
-</nav>
-
 <main id="main" tabindex="-1">
 
   <!-- 视图一：事项视图（每行 = 一个事项，展开看分项与逐日记录） -->
   <section class="view" id="view-items" role="tabpanel" aria-labelledby="tab-items">
     <div class="viewtools">
-      <p class="viewtools__hint">点行（或点 ▸）展开该事项的分项与逐日记录：日期 / 进展内容 / 当日计划 一一对应。</p>
+      <p class="viewtools__hint">点行（或点 ▸）展开该事项的分项与逐日记录：日期 / 进展内容 / 当日计划 一一对应。打印前可先「展开全部」。</p>
       <div class="viewtools__acts">
         <button class="btn btn--ghost" id="btn-expand-all" type="button">展开全部</button>
         <button class="btn btn--ghost" id="btn-collapse-all" type="button">收起全部</button>
@@ -178,7 +193,276 @@
     <p class="empty" id="gantt-empty" hidden>当前筛选条件下没有可排期的事项。</p>
   </section>
 
+  <!-- 视图四：进度面板 -->
+  <section class="view" id="view-panel" role="tabpanel" aria-labelledby="tab-panel" hidden>
+    <div class="panel">
+      <div class="panel__head">
+        <div class="panel__headtext">
+          <h2 class="panel__title">进度面板</h2>
+          <p class="panel__scope" id="panel-scope">当前范围：—</p>
+        </div>
+        <details class="panel__help">
+          <summary class="panel__helpsum">口径说明</summary>
+          <div class="panel__helpbody">
+            <ul>
+              <li><strong>逾期</strong>：今天已过完成时间，且还没有一条进展日期 ≥ 完成时间的非空进展。</li>
+              <li><strong>到期完成</strong>：分母是<strong>已到期</strong>（完成时间已过）的事项数，不是全部事项数；故不显示「完成率」。</li>
+              <li><strong>本周</strong>：周一至周日。</li>
+              <li><strong>7 天无进展</strong>：末次非空进展距今 ≥ 7 天（含从未有进展的）。</li>
+              <li>面板跟随上方筛选；面板内的下钻会同时作用于事项 / 明细 / 甘特视图。</li>
+            </ul>
+          </div>
+        </details>
+      </div>
+
+      <div class="kpis" id="panel-kpis"></div>
+
+      <section class="panel__block" id="panel-block-due">
+        <h3 class="panel__btitle">到期分布（按完成时间所在周）</h3>
+        <div class="duebar" id="panel-duebar"></div>
+      </section>
+
+      <div class="panel__grid">
+        <section class="panel__block" id="panel-block-module">
+          <h3 class="panel__btitle">① 按模块</h3>
+          <div class="table-scroll table-scroll--panel">
+            <table class="grid grid--panel" id="panel-modules">
+              <caption class="sr-only">按一级维度汇总的事项数、已完成、进行中、逾期与本周进展。</caption>
+              <thead>
+                <tr>
+                  <th scope="col">模块</th>
+                  <th scope="col">事项</th>
+                  <th scope="col">已完成</th>
+                  <th scope="col">进行中</th>
+                  <th scope="col">逾期</th>
+                  <th scope="col">本周进展</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-panel-modules"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel__block" id="panel-block-owner">
+          <h3 class="panel__btitle">② 按责任人</h3>
+          <div class="table-scroll table-scroll--panel">
+            <table class="grid grid--panel" id="panel-owners">
+              <caption class="sr-only">按责任人汇总的事项数、进行中、已完成、逾期、本周进展与末次更新。</caption>
+              <thead>
+                <tr>
+                  <th scope="col">责任人</th>
+                  <th scope="col">事项</th>
+                  <th scope="col">进行中</th>
+                  <th scope="col">已完成</th>
+                  <th scope="col">逾期</th>
+                  <th scope="col">本周</th>
+                  <th scope="col">末次更新</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-panel-owners"></tbody>
+            </table>
+          </div>
+          <p class="panel__note" id="panel-concentration"></p>
+        </section>
+
+        <section class="panel__block" id="panel-block-overdue">
+          <h3 class="panel__btitle">③ 逾期项</h3>
+          <div class="table-scroll table-scroll--panel">
+            <table class="grid grid--panel grid--overdue" id="panel-overdue">
+              <caption class="sr-only">当前范围内的逾期事项，按逾期天数倒序。</caption>
+              <thead>
+                <tr>
+                  <th scope="col">事项</th>
+                  <th scope="col">模块</th>
+                  <th scope="col">责任人</th>
+                  <th scope="col">完成时间</th>
+                  <th scope="col">逾期</th>
+                  <th scope="col">末次进展</th>
+                  <th scope="col">操作</th>
+                </tr>
+              </thead>
+              <tbody id="tbody-panel-overdue"></tbody>
+            </table>
+          </div>
+          <p class="empty empty--inline" id="panel-overdue-empty" hidden>当前范围内没有逾期项。</p>
+        </section>
+
+        <section class="panel__block" id="panel-block-week">
+          <h3 class="panel__btitle">④ 本周动态</h3>
+          <p class="panel__note" id="panel-week-note"></p>
+          <div class="weeklist" id="panel-week"></div>
+          <p class="empty empty--inline" id="panel-week-empty" hidden>本周还没有人记进展。</p>
+        </section>
+      </div>
+    </div>
+  </section>
+
 </main>
+
+<!-- 路由页：新建任务（全屏页，不是弹层） -->
+<section class="routepage" id="page-newtask" hidden aria-label="新建任务">
+  <div class="routepage__head">
+    <div>
+      <h2 class="routepage__title">新建任务</h2>
+      <p class="routepage__sub">提交后向源表「重点工作进度 v2」为每个分项追加一行（不占用源表事项序号，页面显示「新」）。</p>
+    </div>
+    <button class="btn btn--ghost" id="nt-close" type="button">返回</button>
+  </div>
+
+  <div class="draftbar" id="nt-draft" hidden>
+    <span id="nt-draft-text">上次未保存的草稿。</span>
+    <button class="btn btn--ghost" id="nt-draft-continue" type="button">继续填写</button>
+    <button class="btn btn--ghost" id="nt-draft-drop" type="button">放弃</button>
+  </div>
+
+  <div class="formlayout">
+    <form class="form" id="form-newtask" autocomplete="off" novalidate>
+      <p class="form__errsum" id="nt-errsum" hidden></p>
+
+      <fieldset class="form__set">
+        <legend class="form__setlegend">归类</legend>
+
+        <div class="form__row">
+          <span class="form__label" id="nt-module-label">一级维度（六大模块）<span class="req" aria-hidden="true">*</span></span>
+          <div class="chips chips--form" id="nt-modules" role="group" aria-labelledby="nt-module-label"></div>
+          <p class="form__err" id="nt-err-module" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <span class="form__label" id="nt-nature-label">二级维度（人 / 流程 / 成本）<span class="req" aria-hidden="true">*</span></span>
+          <div class="chips chips--form" id="nt-natures" role="group" aria-labelledby="nt-nature-label"></div>
+          <p class="form__err" id="nt-err-nature" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-item">具体事项<span class="req" aria-hidden="true">*</span></label>
+          <div class="combo" data-combo="nt-item">
+            <input class="control combo__input" id="nt-item" type="text" placeholder="搜事项名" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-controls="nt-item-list" aria-autocomplete="list">
+            <button class="btn btn--ghost combo__btn" id="nt-item-new" type="button">＋ 新建事项</button>
+            <ul class="combo__list" id="nt-item-list" role="listbox" aria-label="事项候选" hidden></ul>
+          </div>
+          <p class="form__hint" id="nt-item-hint">选已存在的事项会自动带出模块与性质；不在列表里可点「＋ 新建事项」。</p>
+          <p class="form__err" id="nt-err-item" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-sub">分项<span class="req" aria-hidden="true">*</span></label>
+          <div class="combo" data-combo="nt-sub">
+            <input class="control combo__input" id="nt-sub" type="text" placeholder="先选具体事项" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-controls="nt-sub-list" aria-autocomplete="list">
+            <button class="btn btn--ghost combo__btn" id="nt-sub-new" type="button">＋ 新建分项</button>
+            <ul class="combo__list" id="nt-sub-list" role="listbox" aria-label="分项候选" hidden></ul>
+          </div>
+          <p class="form__hint">默认＝事项名。分项名只在同一事项内不可重名。</p>
+          <p class="form__err" id="nt-err-sub" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-intro">分项内容简介</label>
+          <textarea class="control form__ta" id="nt-intro" rows="1" maxlength="100"
+                    placeholder="一句话说明这个分项要做什么（选填）"></textarea>
+          <p class="form__hint"><span id="nt-intro-count">0</span>/100</p>
+        </div>
+      </fieldset>
+
+      <fieldset class="form__set">
+        <legend class="form__setlegend">时间</legend>
+
+        <div class="form__row form__row--2">
+          <div>
+            <label class="form__label" for="nt-start">开始时间<span class="req" aria-hidden="true">*</span></label>
+            <input class="control form__date" id="nt-start" type="date">
+            <p class="form__err" id="nt-err-start" hidden></p>
+          </div>
+          <div>
+            <label class="form__label" for="nt-end">完成时间<span class="req" aria-hidden="true">*</span></label>
+            <input class="control form__date" id="nt-end" type="date">
+            <p class="form__err" id="nt-err-end" hidden></p>
+          </div>
+        </div>
+        <p class="form__hint" id="nt-duration">工期 — 天</p>
+      </fieldset>
+
+      <fieldset class="form__set">
+        <legend class="form__setlegend">责任</legend>
+
+        <div class="form__row">
+          <span class="form__label" id="nt-owner-label">责任人<span class="req" aria-hidden="true">*</span></span>
+          <div class="combo" data-combo="nt-owner">
+            <input class="control combo__input" id="nt-owner" type="text" placeholder="搜姓名（可多选）" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-controls="nt-owner-list" aria-autocomplete="list">
+            <ul class="combo__list" id="nt-owner-list" role="listbox" aria-label="责任人候选" hidden></ul>
+          </div>
+          <div class="taglist" id="nt-owner-tags"></div>
+          <p class="form__err" id="nt-err-owner" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-lead">负责人<span class="req" aria-hidden="true">*</span></label>
+          <div class="combo" data-combo="nt-lead">
+            <input class="control combo__input" id="nt-lead" type="text" placeholder="搜姓名" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-controls="nt-lead-list" aria-autocomplete="list">
+            <ul class="combo__list" id="nt-lead-list" role="listbox" aria-label="负责人候选" hidden></ul>
+          </div>
+          <p class="form__err" id="nt-err-lead" hidden></p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-leadtype">负责人类型</label>
+          <span class="badge badge--warn form__badge" title="口径待定">口径待定</span>
+          <select class="control" id="nt-leadtype"></select>
+          <p class="form__hint">源表取值原样透传。</p>
+        </div>
+
+        <div class="form__row">
+          <label class="form__label" for="nt-coord">协调事项</label>
+          <input class="control" id="nt-coord" type="text" value="暂不填写（口径待定）" disabled aria-describedby="nt-coord-hint">
+          <p class="form__hint" id="nt-coord-hint">源表此列暂无数据，含义待定，暂不开放填写。</p>
+        </div>
+
+        <div class="form__row" id="nt-note-wrap" hidden>
+          <label class="form__label" for="nt-note">备注（仅管理员可见）</label>
+          <textarea class="control form__ta" id="nt-note" rows="2" placeholder="写给后续看的人看，不进源表"></textarea>
+        </div>
+      </fieldset>
+
+      <div class="form__actions">
+        <button class="btn btn--ghost" id="nt-cancel" type="button">取消</button>
+        <button class="btn" id="nt-submit" type="submit">创建任务</button>
+      </div>
+      <p class="form__err form__err--block" id="nt-err-submit" hidden></p>
+    </form>
+
+    <aside class="preview" id="nt-preview" aria-label="实时预览"></aside>
+  </div>
+</section>
+
+<!-- 记一笔进展：桌面居中弹层 / 移动端底部抽屉 -->
+<div class="modal" id="progress-modal" hidden>
+  <div class="modal__backdrop" data-pm-close></div>
+  <div class="modal__panel" id="progress-panel" role="dialog" aria-modal="true" aria-labelledby="pm-title">
+    <header class="modal__head">
+      <span class="modal__grip" aria-hidden="true"></span>
+      <h2 class="modal__title" id="pm-title">记一笔进展</h2>
+      <button class="modal__close" type="button" data-pm-close aria-label="关闭">×</button>
+    </header>
+
+    <div class="modal__body" id="pm-body">
+      <div class="pm__ctx" id="pm-ctx"></div>
+      <div class="pm__status" id="pm-status" hidden></div>
+      <div class="pm__error" id="pm-error" hidden role="alert"></div>
+      <div class="pm__conflict" id="pm-conflict" hidden></div>
+      <div id="pm-form"></div>
+    </div>
+
+    <footer class="modal__foot">
+      <button class="btn btn--ghost" type="button" data-pm-close>取消</button>
+      <button class="btn btn--ghost" id="pm-continue" type="button">保存并继续下一条</button>
+      <button class="btn" id="pm-save" type="button">保存</button>
+    </footer>
+  </div>
+</div>
 
 <details class="notes" id="notes">
   <summary class="notes__summary">
@@ -219,7 +503,7 @@
       <p>判定规则（与 <code>scripts/build_rows.py</code> 一致）：</p>
       <ul>
         <li><span class="badge badge--warn">待核</span> 源表「最新进展」里<strong>某一行没有 MMDD 日期前缀</strong> → 该行按开始时间落行，标「待核」。逐行判定，不是整条事项判定。</li>
-        <li><span class="badge badge--warn">待补</span> 进展与周计划<strong>都为空</strong> → 按开始时间落一行空行，标「待补」。</li>
+        <li><span class="badge badge--warn">待补</span> 进展与周计划<strong>都为空</strong> → 按开始时间落一行空行，标「待补」。新建事项在首次记进展前也会显示「待补」，表示该分项尚未填报进展，<strong>不是数据错误</strong>。</li>
       </ul>
       <p class="notes__muted">当前：待核 5 条、待补 1 条。页面上的「待核」角标即据此渲染。</p>
     </section>
@@ -284,6 +568,7 @@
       <p>源表：企业微信在线表格《集团人力近期重点工作进度表》。链路：</p>
       <p class="notes__muted"><code>extract_online_sheet.py</code> → <code>tasks_online.json</code> → <code>build_rows.py</code> → <code>rows_v2.json</code> → <code>build_data_js.py</code> → <code>data/rows.js</code>（本页面加载）</p>
       <p>「数据截至」= 数据集里<strong>有进展内容</strong>的最晚日期；纯计划的未来日期（如 11 月）不计入。</p>
+      <p class="notes__muted">接入服务端后，读数据走 <code>GET /api/data</code>、身份走 <code>GET /api/session</code>；服务端不可达时本页自动回落到本地快照并进入<strong>只读</strong>模式（双击 <code>index.html</code> 仍可正常浏览）。</p>
     </section>
   </div>
 </details>
@@ -295,5 +580,6 @@
 
 <script src="data/rows.js"></script>
 <script src="app.js"></script>
+<script src="app-multi.js"></script>
 </body>
 </html>

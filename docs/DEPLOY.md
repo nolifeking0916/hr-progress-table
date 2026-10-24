@@ -115,6 +115,93 @@ sudo certbot --nginx -d your-domain.com
 
 ---
 
+## B2 · 带后端的正式部署（多用户 / 写入必需）
+
+页面加了多用户与写入能力后，**光有静态文件不够**：身份判定、写权限、写入源表、进度面板聚合都在服务端。
+所以正式部署是「Python 服务 + nginx 反代」：
+
+### 1. 拉代码与初始化
+
+```bash
+sudo mkdir -p /opt/hr-progress-table && sudo chown $USER /opt/hr-progress-table
+cd /opt/hr-progress-table
+git clone https://github.com/nolifeking0916/hr-progress-table.git .
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt      # 本项目只用标准库，通常是空的
+./scripts/refresh.sh                  # 首次拉取源表数据 → data/rows.js
+```
+
+### 2. 环境变量（**不要写进仓库**）
+
+```bash
+cat > /opt/hr-progress-table/.env <<'ENV'
+HPS_SECRET=换成随机长字符串      # openssl rand -hex 32
+PORT=8787
+HPS_SHEET_ADAPTER=cli           # 用 wecom-cli 读写企微在线表格
+HPS_WECOM_DOCID=e3_ARsADAagAHQCNea2Y2u1wSA00hrX0
+HPS_WECOM_SHEET_TITLE=重点工作进度 v2
+ENV
+chmod 600 /opt/hr-progress-table/.env
+```
+
+### 3. systemd 常驻
+
+```ini
+# /etc/systemd/system/hr-progress-table.service
+[Unit]
+Description=HR Progress Table
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/hr-progress-table
+EnvironmentFile=/opt/hr-progress-table/.env
+ExecStart=/opt/hr-progress-table/.venv/bin/python server.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now hr-progress-table
+sudo systemctl status hr-progress-table
+```
+
+### 4. nginx 反代
+
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
+    root /var/www/html;                 # 静态资源放这里（或直接让 python 服务伺服）
+    index index.html;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### 5. 源表写入的凭据
+
+`HPS_SHEET_ADAPTER=cli` 依赖本机的 `wecom-cli` 已完成企业微信机器人授权（凭据在钥匙串里，不进仓库）。
+服务器上需要单独装一次并授权；**不要**把凭据写进代码或提交。
+
+### 6. 定时刷新数据（可选）
+
+```cron
+30 7 * * * cd /opt/hr-progress-table && . .venv/bin/activate && ./scripts/refresh.sh >> /var/log/hr-refresh.log 2>&1
+```
+
+---
+
 ## C · Docker
 
 ```dockerfile
