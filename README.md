@@ -95,4 +95,6 @@ hr-progress-table/
 
 ## 上线
 
-见 [`docs/DEPLOY.md`](docs/DEPLOY.md)：四种方案——**GitHub Pages**（免费、5 分钟）、**自有云服务器 + nginx**、**Docker**、**腾讯云 CloudBase 静态托管**。
+见 [`docs/DEPLOY.md`](docs/DEPLOY.md)：四种方案——**GitHub Pages**（需公开仓或 GitHub Pro；内部数据不建议公开）、**自有云服务器 + nginx**（推荐）、**Docker**、**腾讯云 CloudBase 静态托管**。
+
+> 仓库默认 `private`。内部 HR 进展与责任人数据不适合公开，因此实际推荐走 **B（自有服务器 + nginx）**：服务器上 `git pull` 后由 nginx 直接托管静态文件。
